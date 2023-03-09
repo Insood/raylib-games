@@ -1,293 +1,243 @@
-/*******************************************************************************************
-*
-*   raylib game template
-*
-*   <Game title>
-*   <Game description>
-*
-*   This game has been created using raylib (www.raylib.com)
-*   raylib is licensed under an unmodified zlib/libpng license (View raylib.h for details)
-*
-*   Copyright (c) 2021 Ramon Santamaria (@raysan5)
-*
-********************************************************************************************/
-
 #include "raylib.h"
-#include "screens.h"    // NOTE: Declares global (extern) variables and screens functions
 
-#if defined(PLATFORM_WEB)
-    #include <emscripten/emscripten.h>
-#endif
+struct LinkedCell {
+	int row;
+	int col;
+	struct LinkedCell * next;
+};
 
-//----------------------------------------------------------------------------------
-// Shared Variables Definition (global)
-// NOTE: Those variables are shared between modules through screens.h
-//----------------------------------------------------------------------------------
-GameScreen currentScreen = LOGO;
-Font font = { 0 };
-Music music = { 0 };
-Sound fxCoin = { 0 };
+void PlacePellet();
 
-//----------------------------------------------------------------------------------
-// Local Variables Definition (local to this module)
-//----------------------------------------------------------------------------------
-static const int screenWidth = 800;
-static const int screenHeight = 450;
+static const int gameRows = 15;
+static const int gameCols = 15;
+static const int lineThickness = 2;
+static const int cellSize = 50;
 
-// Required variables to manage screen transitions (fade-in, fade-out)
-static float transAlpha = 0.0f;
-static bool onTransition = false;
-static bool transFadeOut = false;
-static int transFromScreen = -1;
-static GameScreen transToScreen = UNKNOWN;
+/* Game state globals */
+int windowWidth;
+int windowHeight;
+int directionX;
+int directionY;
+float updatesPerMove;
+int updateCounter;
+int snakeLength;
 
-//----------------------------------------------------------------------------------
-// Local Functions Declaration
-//----------------------------------------------------------------------------------
-static void ChangeToScreen(int screen);     // Change to screen, no transition effect
+static const Color lineColor = {0, 0, 0, 64};
+static const Color snakeBodyColor = {0, 0, 0, 255 };
+static const Color pelletColor = { 255, 0, 0, 64 };
 
-static void TransitionToScreen(int screen); // Request transition to next screen
-static void UpdateTransition(void);         // Update transition effect
-static void DrawTransition(void);           // Draw transition effect (full-screen rectangle)
+struct LinkedCell * snakeHead;
+struct LinkedCell foodPellet;
 
-static void UpdateDrawFrame(void);          // Update and draw one frame
+void InitGlobals() {
+	windowWidth = gameCols * cellSize + (gameCols - 1) * lineThickness;
+	windowHeight = gameRows * cellSize + (gameRows - 1) * lineThickness;
+	updatesPerMove = 30;
+	updateCounter = 1;
 
-//----------------------------------------------------------------------------------
-// Main entry point
-//----------------------------------------------------------------------------------
+	snakeHead = (struct LinkedCell *)malloc(sizeof(struct LinkedCell));
+	snakeHead->row = gameRows / 2;
+	snakeHead->col = gameCols / 2;
+	snakeHead->next = NULL;
+	
+	snakeLength = 1;
+	directionX = 0; // No X direction
+	directionY = 1; // Move straight down initially
+	PlacePellet();
+}
+
+void CleanUpMemory() {
+	struct LinkedCell * currentCell = snakeHead;
+	while (true) {
+		struct LinkedCell * next = currentCell->next;
+		free(currentCell);
+		if (next){
+			currentCell = next;
+		} else {
+			break;
+		}
+	}
+}
+
+void DrawGameGrid() {
+	for (int row = 0; row < gameRows - 1; row++) {
+		int y = cellSize + row * (lineThickness + cellSize);
+		DrawRectangle(0, y, windowWidth, lineThickness, lineColor);
+	}
+
+	for (int col = 0; col < gameCols - 1; col++) {
+		int x = cellSize + col * (lineThickness + cellSize);
+		DrawRectangle(x, 0, lineThickness, windowHeight, lineColor);
+	}
+}
+
+void DrawCell(struct LinkedCell * cell, Color cellColor) {
+	int x = cell->col * (lineThickness + cellSize);
+	int y = cell->row * (lineThickness + cellSize);
+	DrawRectangle(x, y, cellSize, cellSize, cellColor);
+}
+
+void DrawSnake()
+{
+	struct LinkedCell * currentSnakeCell = snakeHead;
+	Color cellColor = snakeBodyColor;
+
+	while (true) {
+		DrawCell(currentSnakeCell, cellColor);
+		printf("%i\n", cellColor.a);
+		if (currentSnakeCell->next) {
+			currentSnakeCell = currentSnakeCell->next;
+		}
+		else {
+			break;
+		}
+		if (cellColor.a > 64) {
+			cellColor.a -= 5;
+		}
+	}
+}
+
+void DrawPellet() {
+	DrawCell(&foodPellet, pelletColor);
+}
+
+bool LinkedCellListHasValue(struct LinkedCell * head, int x, int y) {
+	while (true) {
+		if (head->row == y && head->col == x) {
+			return true;
+		}
+		else if (head->next) {
+			head = head->next;
+		}
+		else {
+			return false;
+		}
+	}
+}
+
+void PlacePellet() {
+	while (true) {
+		int x = GetRandomValue(0, gameCols - 1);
+		int y = GetRandomValue(0, gameRows - 1);
+
+		if (!LinkedCellListHasValue(snakeHead, x, y)) {
+			foodPellet.row = y;
+			foodPellet.col = x;
+			break;
+		}
+	}
+}
+
+void IncreaseSpeed() {
+	// Needs to be some sort of asymptotic function
+	updatesPerMove -= 0.2f;
+}
+
+void GrowSnake(struct LinkedCell * cell) {
+	struct LinkedCell * newCell = (struct LinkedCell *)malloc(sizeof(struct LinkedCell));
+	newCell->row = cell->row;
+	newCell->col = cell->col;
+	newCell->next = snakeHead;
+	snakeHead = newCell;
+	snakeLength += 1;
+}
+
+void EndGame() {
+	CleanUpMemory();
+	InitGlobals();
+}
+
+void MoveSnake() {
+	struct LinkedCell * currentCell = snakeHead;
+
+	int newX = snakeHead->col + directionX;
+	int newY = snakeHead->row + directionY;
+
+	while (true) {
+		int savedX = currentCell->col;
+		int savedY = currentCell->row;
+
+		currentCell->row = newY;
+		currentCell->col = newX;
+
+		if (currentCell->next) {
+			currentCell = currentCell->next;
+			newX = savedX;
+			newY = savedY;
+		}
+		else {
+			break;
+		}
+	}
+}
+
+void UpdateSnake() {
+	updateCounter++;
+	if (updateCounter < updatesPerMove) { return; }
+	updateCounter = 0;
+
+	int nextX = snakeHead->col + directionX;
+	int nextY = snakeHead->row + directionY;
+
+	if (nextX == foodPellet.col && nextY == foodPellet.row) {
+		GrowSnake(&foodPellet);
+		PlacePellet();
+		IncreaseSpeed();
+		return;
+	}
+
+	if (LinkedCellListHasValue(snakeHead, nextX, nextY)) {
+		EndGame();
+	}
+
+	MoveSnake();
+}
+
+void HandleInput() {
+	if(IsKeyDown(KEY_LEFT)) {
+		directionX = -1;
+		directionY = 0;
+	}
+	else if (IsKeyDown(KEY_RIGHT)) {
+		directionX = 1;
+		directionY = 0;
+	}
+	else if (IsKeyDown(KEY_UP)) {
+		directionX = 0;
+		directionY = -1;
+	}
+	else if (IsKeyDown(KEY_DOWN)) {
+		directionX = 0;
+		directionY = 1;
+	}
+}
+
+void CheckBounds() {
+	if ((snakeHead->col < 0) || (snakeHead->row < 0) || (snakeHead->row > gameRows - 1) || (snakeHead->col > gameCols - 1)) {
+		EndGame();
+	}
+}
+
 int main(void)
 {
-    // Initialization
-    //---------------------------------------------------------
-    InitWindow(screenWidth, screenHeight, "raylib game template");
+	InitGlobals();
+	SetTargetFPS(60);
+	InitWindow(windowWidth, windowHeight, "Snek");
 
-    InitAudioDevice();      // Initialize audio device
+	while (!WindowShouldClose())
+	{
+		HandleInput();
+		CheckBounds();
+		UpdateSnake();
+		BeginDrawing();
+			ClearBackground(WHITE);
+			DrawGameGrid();
+			DrawPellet();
+			DrawSnake();
+		EndDrawing();
+	}
 
-    // Load global data (assets that must be available in all screens, i.e. font)
-    font = LoadFont("resources/mecha.png");
-    music = LoadMusicStream("resources/ambient.ogg");
-    fxCoin = LoadSound("resources/coin.wav");
+	CloseWindow();
 
-    SetMusicVolume(music, 1.0f);
-    PlayMusicStream(music);
-
-    // Setup and init first screen
-    currentScreen = LOGO;
-    InitLogoScreen();
-
-#if defined(PLATFORM_WEB)
-    emscripten_set_main_loop(UpdateDrawFrame, 60, 1);
-#else
-    SetTargetFPS(60);       // Set our game to run at 60 frames-per-second
-    //--------------------------------------------------------------------------------------
-
-    // Main game loop
-    while (!WindowShouldClose())    // Detect window close button or ESC key
-    {
-        UpdateDrawFrame();
-    }
-#endif
-
-    // De-Initialization
-    //--------------------------------------------------------------------------------------
-    // Unload current screen data before closing
-    switch (currentScreen)
-    {
-        case LOGO: UnloadLogoScreen(); break;
-        case TITLE: UnloadTitleScreen(); break;
-        case GAMEPLAY: UnloadGameplayScreen(); break;
-        case ENDING: UnloadEndingScreen(); break;
-        default: break;
-    }
-
-    // Unload global data loaded
-    UnloadFont(font);
-    UnloadMusicStream(music);
-    UnloadSound(fxCoin);
-
-    CloseAudioDevice();     // Close audio context
-
-    CloseWindow();          // Close window and OpenGL context
-    //--------------------------------------------------------------------------------------
-
-    return 0;
-}
-
-//----------------------------------------------------------------------------------
-// Module specific Functions Definition
-//----------------------------------------------------------------------------------
-// Change to next screen, no transition
-static void ChangeToScreen(GameScreen screen)
-{
-    // Unload current screen
-    switch (currentScreen)
-    {
-        case LOGO: UnloadLogoScreen(); break;
-        case TITLE: UnloadTitleScreen(); break;
-        case GAMEPLAY: UnloadGameplayScreen(); break;
-        case ENDING: UnloadEndingScreen(); break;
-        default: break;
-    }
-
-    // Init next screen
-    switch (screen)
-    {
-        case LOGO: InitLogoScreen(); break;
-        case TITLE: InitTitleScreen(); break;
-        case GAMEPLAY: InitGameplayScreen(); break;
-        case ENDING: InitEndingScreen(); break;
-        default: break;
-    }
-
-    currentScreen = screen;
-}
-
-// Request transition to next screen
-static void TransitionToScreen(GameScreen screen)
-{
-    onTransition = true;
-    transFadeOut = false;
-    transFromScreen = currentScreen;
-    transToScreen = screen;
-    transAlpha = 0.0f;
-}
-
-// Update transition effect (fade-in, fade-out)
-static void UpdateTransition(void)
-{
-    if (!transFadeOut)
-    {
-        transAlpha += 0.05f;
-
-        // NOTE: Due to float internal representation, condition jumps on 1.0f instead of 1.05f
-        // For that reason we compare against 1.01f, to avoid last frame loading stop
-        if (transAlpha > 1.01f)
-        {
-            transAlpha = 1.0f;
-
-            // Unload current screen
-            switch (transFromScreen)
-            {
-                case LOGO: UnloadLogoScreen(); break;
-                case TITLE: UnloadTitleScreen(); break;
-                case OPTIONS: UnloadOptionsScreen(); break;
-                case GAMEPLAY: UnloadGameplayScreen(); break;
-                case ENDING: UnloadEndingScreen(); break;
-                default: break;
-            }
-
-            // Load next screen
-            switch (transToScreen)
-            {
-                case LOGO: InitLogoScreen(); break;
-                case TITLE: InitTitleScreen(); break;
-                case GAMEPLAY: InitGameplayScreen(); break;
-                case ENDING: InitEndingScreen(); break;
-                default: break;
-            }
-
-            currentScreen = transToScreen;
-
-            // Activate fade out effect to next loaded screen
-            transFadeOut = true;
-        }
-    }
-    else  // Transition fade out logic
-    {
-        transAlpha -= 0.02f;
-
-        if (transAlpha < -0.01f)
-        {
-            transAlpha = 0.0f;
-            transFadeOut = false;
-            onTransition = false;
-            transFromScreen = -1;
-            transToScreen = UNKNOWN;
-        }
-    }
-}
-
-// Draw transition effect (full-screen rectangle)
-static void DrawTransition(void)
-{
-    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, transAlpha));
-}
-
-// Update and draw game frame
-static void UpdateDrawFrame(void)
-{
-    // Update
-    //----------------------------------------------------------------------------------
-    UpdateMusicStream(music);       // NOTE: Music keeps playing between screens
-
-    if (!onTransition)
-    {
-        switch(currentScreen)
-        {
-            case LOGO:
-            {
-                UpdateLogoScreen();
-
-                if (FinishLogoScreen()) TransitionToScreen(TITLE);
-
-            } break;
-            case TITLE:
-            {
-                UpdateTitleScreen();
-
-                if (FinishTitleScreen() == 1) TransitionToScreen(OPTIONS);
-                else if (FinishTitleScreen() == 2) TransitionToScreen(GAMEPLAY);
-
-            } break;
-            case OPTIONS:
-            {
-                UpdateOptionsScreen();
-
-                if (FinishOptionsScreen()) TransitionToScreen(TITLE);
-
-            } break;
-            case GAMEPLAY:
-            {
-                UpdateGameplayScreen();
-
-                if (FinishGameplayScreen() == 1) TransitionToScreen(ENDING);
-                //else if (FinishGameplayScreen() == 2) TransitionToScreen(TITLE);
-
-            } break;
-            case ENDING:
-            {
-                UpdateEndingScreen();
-
-                if (FinishEndingScreen() == 1) TransitionToScreen(TITLE);
-
-            } break;
-            default: break;
-        }
-    }
-    else UpdateTransition();    // Update transition (fade-in, fade-out)
-    //----------------------------------------------------------------------------------
-
-    // Draw
-    //----------------------------------------------------------------------------------
-    BeginDrawing();
-
-        ClearBackground(RAYWHITE);
-
-        switch(currentScreen)
-        {
-            case LOGO: DrawLogoScreen(); break;
-            case TITLE: DrawTitleScreen(); break;
-            case OPTIONS: DrawOptionsScreen(); break;
-            case GAMEPLAY: DrawGameplayScreen(); break;
-            case ENDING: DrawEndingScreen(); break;
-            default: break;
-        }
-
-        // Draw full screen rectangle in front of everything
-        if (onTransition) DrawTransition();
-
-        //DrawFPS(10, 10);
-
-    EndDrawing();
-    //----------------------------------------------------------------------------------
+	return 0;
 }
